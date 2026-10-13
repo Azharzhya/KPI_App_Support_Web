@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#12233d">
+<title>Foto cash opname</title>
+<style>
+:root{--ink:#12233d;--paper:#f3f5f8;--card:#fff;--line:#d9e0e8;--text:#1b2a3d;--muted:#5d6b7c;--blue:#2b6cb0;--ok:#22643f;--ok-bg:#e3f5ea;--bad:#9b2222;--bad-bg:#fde8e8;--info-bg:#e6f0fb}
+@media (prefers-color-scheme:dark){:root{--paper:#0e1a2b;--card:#16263b;--line:#27405d;--text:#e6edf5;--muted:#9fb0c4;--blue:#6aa6e6;--ok:#8fd8ae;--ok-bg:#16382a;--bad:#f3a1a1;--bad-bg:#3d1b1b;--info-bg:#1b3350}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--paper);color:var(--text);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding-bottom:calc(24px + env(safe-area-inset-bottom))}
+header{background:var(--ink);color:#fff;padding:calc(18px + env(safe-area-inset-top)) 20px 16px}
+h1{margin:0;font-size:21px;font-weight:650}
+header p{margin:2px 0 0;font-size:14px;opacity:.88}
+.timer{font-variant-numeric:tabular-nums;font-weight:600;opacity:1!important}
+main{max-width:520px;margin:0 auto;padding:16px}
+.notice{margin:0 0 14px;padding:11px 14px;border-radius:10px;font-size:14.5px;background:var(--info-bg)}
+.notice.err{background:var(--bad-bg);color:var(--bad)}
+.notice.ok{background:var(--ok-bg);color:var(--ok)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
+.head{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+h2{margin:0;font-size:17px}
+.tag{font-size:13px;color:var(--muted);text-align:right}
+.tag.done{color:var(--ok);font-weight:600}
+.shot{margin:12px 0 0}
+.shot img{display:block;width:100%;height:auto;border-radius:8px;border:1px solid var(--line)}
+.hint{margin:10px 0 0;font-size:14px;color:var(--muted);white-space:pre-line}
+.hint.err{color:var(--bad)}
+.row{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.btn{flex:1 1 140px;min-height:48px;display:flex;align-items:center;justify-content:center;border-radius:10px;border:1px solid var(--blue);background:transparent;color:var(--blue);font:inherit;font-weight:600;cursor:pointer;text-align:center;padding:8px 14px}
+.btn.solid{background:var(--blue);color:#fff}
+.btn.off{opacity:.45;pointer-events:none}
+.btn:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+.file{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
+</style>
+</head>
+<body>
+<header>
+  <h1>Foto cash opname</h1>
+  <p id="who">Memuat…</p>
+  <p id="timer" class="timer"></p>
+</header>
+<main>
+  <p id="notice" class="notice" hidden></p>
+  <div id="cards"></div>
+</main>
+<script>
+(() => {
+'use strict';
+// Alamat Web App Apps Script (sama dengan NIK_SYNC_URL di app.js). Kalau deployment baru, ganti di sini.
+const API_URL = 'https://script.google.com/macros/s/AKfycby-mdsr_0Z9xBJnR0votH2k9ceh11vbGkjghmpBZGwzXRtFKx_S8gZWcLKzWZIOKAJOZA/exec';
+const MAX_SIDE = 1200;          // sisi terpanjang foto (px), sama dengan kompres di aplikasi
+const MAX_BYTES = 1400000;      // di bawah batas server (1,5 MB)
+const SLOTS = { kas: 'Buku Kas', bank: 'Buku Bank' };
+const BULAN = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+const $ = id => document.getElementById(id);
+const m = location.hash.match(/(?:^#|&)t=([0-9a-f]{32})(?:&|$)/i);
+const token = m ? m[1].toLowerCase() : '';   // token ada di fragmen (#), tidak ikut terkirim ke server GitHub
+let info = null, offset = 0, expired = false;
+const st = { kas: {}, bank: {} };
+
+const p2 = n => String(n).padStart(2, '0');
+const now = () => Date.now() + offset;       // jam server, bukan jam HP
+const wib = ms => new Date(ms + 7 * 3600 * 1000);
+const fmtJam = ms => { const d = wib(ms); return `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`; };
+const fmtWib = ms => { const d = wib(ms); return `${p2(d.getUTCDate())}/${p2(d.getUTCMonth() + 1)}/${d.getUTCFullYear()} ${fmtJam(ms)}`; };
+const fmtTgl = s => { const [y, mo, d] = String(s).split('-'); return BULAN[+mo - 1] ? `${+d} ${BULAN[+mo - 1]} ${y}` : s; };
+const fmtLeft = ms => { const s = Math.floor(ms / 1000), h = Math.floor(s / 3600); return (h ? h + ':' : '') + p2(Math.floor(s % 3600 / 60)) + ':' + p2(s % 60); };
+
+async function api(params) {
+  const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(params).toString() });
+  if (!res.ok) throw new Error('status ' + res.status);
+  return res.json();
+}
+function notice(msg, kind) { const n = $('notice'); n.textContent = msg; n.className = 'notice' + (kind ? ' ' + kind : ''); n.hidden = !msg; }
+
+function build() {
+  $('cards').innerHTML = Object.keys(SLOTS).map(k => `
+    <article class="card">
+      <div class="head"><h2>${SLOTS[k]}</h2><span class="tag" id="tag-${k}"></span></div>
+      <figure class="shot" id="shot-${k}" hidden><img id="img-${k}" alt="Foto ${SLOTS[k]} yang sudah diberi tanggal dan jam"></figure>
+      <p class="hint" id="hint-${k}"></p>
+      <div class="row">
+        <label class="btn" id="pick-${k}"><span id="pl-${k}">Ambil foto</span><input class="file" id="in-${k}" type="file" accept="image/*" capture="environment"></label>
+        <button class="btn solid" id="send-${k}" type="button" hidden>Kirim foto</button>
+      </div>
+    </article>`).join('');
+  Object.keys(SLOTS).forEach(k => {
+    $('in-' + k).addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; onPick(k, f); });
+    $('send-' + k).addEventListener('click', () => send(k));
+  });
+}
+
+function paint(k) {
+  const s = st[k], left = info.maxPerSlot - (s.count || 0);
+  const off = expired || s.pulled || left <= 0 || s.busy;
+  $('tag-' + k).textContent = s.pulled ? 'Sudah diterima petugas' : s.uploaded ? `Terkirim ${fmtJam(s.at)} WIB` : 'Belum ada foto';
+  $('tag-' + k).className = 'tag' + (s.uploaded ? ' done' : '');
+  $('pl-' + k).textContent = s.busy ? 'Memproses…' : s.uploaded ? `Ganti foto (sisa ${Math.max(left, 0)}x)` : 'Ambil foto';
+  $('pick-' + k).classList.toggle('off', !!off);
+  $('in-' + k).disabled = !!off;
+  $('send-' + k).hidden = !s.pending;
+  $('send-' + k).disabled = !!s.busy;
+  $('send-' + k).textContent = s.sending ? 'Mengirim…' : 'Kirim foto';
+  $('hint-' + k).textContent = s.hint || '';
+  $('hint-' + k).className = 'hint' + (s.err ? ' err' : '');
+}
+
+function loadImg(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); res(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('img')); };
+    img.src = url;
+  });
+}
+
+// Perkecil lalu cap tanggal + jam (jam server, WIB) langsung ke piksel foto.
+async function stampPhoto(file, k) {
+  const img = await loadImg(file);
+  const sc = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+  const w = Math.round(img.naturalWidth * sc), h = Math.round(img.naturalHeight * sc);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.drawImage(img, 0, 0, w, h);
+  const t1 = fmtWib(now()) + ' WIB';
+  const t2 = `${SLOTS[k]} | ${info.cabang} | ${info.code}`;
+  const fs = Math.max(14, Math.round(w * 0.032)), pad = Math.round(fs * 0.6);
+  let fs2 = Math.round(fs * 0.8);
+  const font = (wt, px) => `${wt} ${px}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+  g.font = font(600, fs2);
+  while (g.measureText(t2).width > w - 2 * pad && fs2 > 9) { fs2--; g.font = font(600, fs2); }
+  const barH = Math.round(fs + fs2 + pad * 2.2);
+  g.textBaseline = 'top';
+  g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(0, h - barH, w, barH);
+  g.fillStyle = '#fff';
+  g.font = font(700, fs); g.fillText(t1, pad, h - barH + pad);
+  g.font = font(600, fs2); g.fillText(t2, pad, h - barH + pad * 1.2 + fs);
+  // cap kecil di pojok kiri atas: tetap ada walau bagian bawah foto dipotong
+  const sm = Math.max(11, Math.round(fs * 0.7));
+  g.font = font(700, sm);
+  g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(0, 0, g.measureText(t1).width + sm, Math.round(sm * 1.8));
+  g.fillStyle = '#fff'; g.fillText(t1, sm * 0.5, sm * 0.4);
+  for (const q of [0.82, 0.72, 0.6, 0.5]) {
+    const url = c.toDataURL('image/jpeg', q), b64 = url.slice(url.indexOf(',') + 1);
+    if (b64.length * 0.75 <= MAX_BYTES) return { url, b64 };
+  }
+  throw new Error('too big');
+}
+
+async function onPick(k, file) {
+  if (!file) return;
+  const s = st[k];
+  s.busy = true; s.pending = null; s.hint = ''; s.err = false; paint(k);
+  try {
+    s.pending = await stampPhoto(file, k);
+    $('img-' + k).src = s.pending.url; $('shot-' + k).hidden = false;
+    s.hint = 'Pastikan tulisan di buku terbaca jelas. Kalau sudah jelas, tekan Kirim foto.';
+  } catch (e) {
+    s.hint = 'Foto tidak bisa diproses. Ambil foto lagi.'; s.err = true;
+  }
+  s.busy = false; paint(k);
+}
+
+async function send(k) {
+  const s = st[k];
+  if (!s.pending || s.busy) return;
+  s.busy = true; s.sending = true; s.hint = ''; s.err = false; paint(k);
+  try {
+    const r = await api({ action: 'uploadPhoto', token, slot: k, image: s.pending.b64, ua: navigator.userAgent.slice(0, 150) });
+    if (!r.ok) {
+      s.hint = r.error || 'Foto belum terkirim.'; s.err = true;
+      if (r.code === 'EXPIRED') expired = true;
+      if (r.code === 'LOCKED') s.pulled = true;
+      if (r.code === 'LIMIT') s.count = info.maxPerSlot;
+    } else {
+      Object.assign(s, { uploaded: true, count: r.count, at: r.at, pending: null });
+      s.hint = r.remaining > 0 ? 'Foto terkirim. Kalau kurang jelas, Anda masih bisa menggantinya.' : 'Foto terkirim.';
+      offset = r.serverNow - Date.now();
+      if (st.kas.uploaded && st.bank.uploaded) notice('Kedua foto sudah terkirim. Halaman ini boleh ditutup.', 'ok');
+    }
+  } catch (e) {
+    s.hint = 'Gagal mengirim. Periksa internet lalu tekan Kirim foto lagi.'; s.err = true;
+  }
+  s.busy = false; s.sending = false; paint(k);
+}
+
+function tick() {
+  const left = info.expiresAt - now();
+  if (left <= 0) {
+    if (!expired) { expired = true; Object.keys(SLOTS).forEach(paint); }
+    $('timer').textContent = 'Link sudah berakhir';
+    return;
+  }
+  $('timer').textContent = 'Berlaku ' + fmtLeft(left) + ' lagi';
+}
+
+async function init() {
+  if (!token) { notice('Link tidak lengkap. Buka link persis seperti yang dikirim petugas.', 'err'); $('who').textContent = ''; return; }
+  try {
+    const t0 = Date.now();
+    const r = await api({ action: 'uploadInfo', token });
+    const t1 = Date.now();
+    if (!r.ok) { notice(r.error || 'Link tidak bisa dibuka.', 'err'); $('who').textContent = ''; return; }
+    info = r; offset = r.serverNow - (t0 + t1) / 2; expired = !!r.expired;
+    Object.keys(SLOTS).forEach(k => { st[k] = Object.assign({}, r[k]); });
+    $('who').textContent = `Cabang ${r.cabang}, ${fmtTgl(r.tanggal)}`;
+    build(); Object.keys(SLOTS).forEach(paint);
+    notice(expired ? 'Link sudah kedaluwarsa. Minta petugas mengirim link baru.' : 'Ambil foto setelah video call selesai. Tanggal dan jam otomatis tercetak di foto.', expired ? 'err' : '');
+    tick(); setInterval(tick, 1000);
+  } catch (e) {
+    notice('Tidak bisa terhubung. Periksa internet lalu muat ulang halaman.', 'err'); $('who').textContent = '';
+  }
+}
+init();
+})();
+</script>
+</body>
+</html>
