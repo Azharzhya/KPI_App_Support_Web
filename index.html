@@ -121,7 +121,7 @@ function paint(k) {
   $('in-' + k).disabled = !!off;
   $('send-' + k).hidden = !s.pending;
   $('send-' + k).disabled = !!s.busy;
-  $('send-' + k).textContent = s.sending ? 'Mengirim…' : 'Kirim foto';
+  $('send-' + k).textContent = s.sending ? (s.waiting ? 'Menunggu giliran…' : 'Mengirim…') : 'Kirim foto';
   $('hint-' + k).textContent = s.hint || '';
   $('hint-' + k).className = 'hint' + (s.err ? ' err' : '');
 }
@@ -182,10 +182,23 @@ async function onPick(k, file) {
   s.busy = false; paint(k);
 }
 
-async function send(k) {
+// ANTREAN KIRIM: foto Kas dan Bank tidak pernah dikirim bersamaan. Kalau satu foto sedang dikirim, foto lain menunggu
+// sampai yang pertama SELESAI (berhasil atau gagal), baru dikirim. Dengan begitu server tidak pernah menerima dua unggahan
+// untuk sesi yang sama dalam hitungan detik.
+let sendChain = Promise.resolve();
+let inflight = 0;                                  // jumlah foto yang sedang dikirim atau menunggu giliran
+const delay = ms => new Promise(r => setTimeout(r, ms));
+function send(k) {
   const s = st[k];
   if (!s.pending || s.busy) return;
-  s.busy = true; s.sending = true; s.hint = ''; s.err = false; paint(k);
+  s.busy = true; s.sending = true; s.waiting = inflight > 0; s.hint = s.waiting ? 'Menunggu giliran kirim. Foto lain sedang dikirim.' : ''; s.err = false;
+  inflight++; paint(k);
+  sendChain = sendChain.then(() => doSend(k)).catch(() => {}).then(() => { inflight--; });
+}
+
+async function doSend(k) {
+  const s = st[k];
+  if (s.waiting) { await delay(400); s.waiting = false; s.hint = ''; paint(k); }   // jeda singkat setelah pengiriman sebelumnya
   try {
     const r = await api({ action: 'uploadPhoto', token, slot: k, image: s.pending.b64, ua: navigator.userAgent.slice(0, 150) }, 90000); // foto sampai ~1,4 MB di jaringan seluler: beri waktu lebih
     if (!r.ok) {
